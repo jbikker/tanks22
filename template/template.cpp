@@ -88,7 +88,12 @@ void main()
 	glfwWindowHint( GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE );
 	glfwWindowHint( GLFW_STENCIL_BITS, GL_FALSE );
 	glfwWindowHint( GLFW_RESIZABLE, GL_FALSE /* easier :) */ );
-	if (!(window = glfwCreateWindow( SCRWIDTH, SCRHEIGHT, "Tanks'22", 0, 0 ))) FatalError( "glfwCreateWindow failed." );
+#ifdef FULLSCREEN
+	window = glfwCreateWindow( SCRWIDTH, SCRHEIGHT, "Tanks'22", glfwGetPrimaryMonitor(), 0 );
+#else
+	window = glfwCreateWindow( SCRWIDTH, SCRHEIGHT, "Tanks'22", 0, 0 );
+#endif
+	if (!window) FatalError( "glfwCreateWindow failed." );
 	glfwMakeContextCurrent( window );
 	// register callbacks
 	glfwSetWindowSizeCallback( window, ReshapeWindowCallback );
@@ -107,7 +112,7 @@ void main()
 	glDisable( GL_BLEND );
 	CheckGL();
 	// we want a console window for text output
-#ifdef _MSC_VER
+#ifndef FULLSCREEN
 	CONSOLE_SCREEN_BUFFER_INFO coninfo;
 	AllocConsole();
 	GetConsoleScreenBufferInfo( GetStdHandle( STD_OUTPUT_HANDLE ), &coninfo );

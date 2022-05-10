@@ -60,7 +60,9 @@ Sprite::Sprite( const char* fileName, int2 topLeft, int2 bottomRight, int size, 
 		{
 			uint a1 = original.pixels[i + 1] >> 24, a2 = original.pixels[i - 1] >> 24;
 			uint a3 = original.pixels[i + w] >> 24, a4 = original.pixels[i - w] >> 24;
-			tmp[i] = (original.pixels[i] & 0xffffff) + (original.pixels[i] * 2 + a1 + a2 + a3 + a4) / 6;
+			uint ac = original.pixels[i] >> 24;
+			uint a = (2 * ac + a1 + a2 + a3 + a4) / 6;
+			tmp[i] = (original.pixels[i] & 0xffffff) + (a << 24);
 		}
 		memcpy( original.pixels + w + 1, tmp + w + 1, pixelCount - (2 * w + 1) );
 	}

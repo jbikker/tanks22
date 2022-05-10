@@ -20,12 +20,12 @@ void Grid::Populate( const vector<Actor*>& actors )
 	}
 }
 
-ActorList& Grid::FindNearbyTanks( Tank* tank )
+ActorList& Grid::FindNearbyTanks( Tank* tank, float radius )
 {
-	return FindNearbyTanks( tank->pos, tank );
+	return FindNearbyTanks( tank->pos, radius, tank );
 }
 
-ActorList& Grid::FindNearbyTanks( float2 position, Tank* tank )
+ActorList& Grid::FindNearbyTanks( float2 position, float radius, Tank* tank )
 {
 	int2 mapSize = MyApp::map.MapSize();
 	float2 posScale = GRIDSIZE * make_float2( 1.0f / mapSize.x, 1.0f / mapSize.y );
@@ -40,7 +40,10 @@ ActorList& Grid::FindNearbyTanks( float2 position, Tank* tank )
 			for (int i = 0; i < cell[x + y * GRIDSIZE].count; i++)
 			{
 				Tank* other = cell[x + y * GRIDSIZE].tank[i];
-				if (other != tank) answer.tank[answer.count++ & (CELLCAPACITY - 1)] = other;
+				if (other == tank) continue;
+				float sqrDist = sqrLength( other->pos - position );
+				if (sqrDist > radius * radius) continue;
+				answer.tank[answer.count++ & (CELLCAPACITY - 1)] = other;
 			}
 		}
 	}
