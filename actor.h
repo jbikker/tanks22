@@ -80,7 +80,7 @@ public:
 	void Remove() { sprite.Remove(); }
 	void Tick();
 	void Draw() { sprite.Draw( Map::bitmap, pos, frame ); }
-	uint backup[4], color = 0, frame, frameChange;
+	uint backup[4], color = 0, frame = 0, frameChange;
 	bool hasBackup = false;
 	SpriteInstance sprite;
 	float2 pos, dir;
