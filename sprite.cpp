@@ -1,5 +1,25 @@
 #include "precomp.h"
 
+// Fast sprite code by Marc de Fluiter.
+
+// Enable loop unrolling or not
+#define UNROLLING
+
+// OPT: Precalculations
+const float2 p[4] = { make_float2( -1, -1 ), make_float2( 1, -1 ), make_float2( 1, 1 ), make_float2( -1, 1 ) };
+const float TAU = 2 * PI;
+const float oneSixth = 1 / 6;
+
+// OPT: Ternary operator instead of minimum/maximum functions
+inline int min( int x, int y )
+{
+	return (x < y) ? x : y;
+}
+inline int max( int x, int y )
+{
+	return (x > y) ? x : y;
+}
+
 uint ReadBilerp( Surface& bitmap, float u, float v )
 {
 	// read from a bitmap with bilinear interpolation.
@@ -7,9 +27,11 @@ uint ReadBilerp( Surface& bitmap, float u, float v )
 	int iu1 = (int)u % bitmap.width, iv1 = (int)v % bitmap.height;
 	int iu2 = (iu1 + 1) % bitmap.width, iv2 = (iv1 + 1) % bitmap.height;
 	int fracu = (int)((u - floorf( u )) * 16383), fracv = (int)((v - floorf( v )) * 16383);
-	return ScaleColor( bitmap.pixels[iu1 + iv1 * bitmap.width], ((16383 - fracu) * (16384 - fracv)) >> 20 ) +
-		ScaleColor( bitmap.pixels[iu2 + iv1 * bitmap.width], (fracu * (16384 - fracv)) >> 20 ) +
-		ScaleColor( bitmap.pixels[iu1 + iv2 * bitmap.width], ((16383 - fracu) * fracv) >> 20 ) +
+	// OPT: Precalculations
+	int fracu_rev = 16383 - fracu, fracv_rev = 16384 - fracv;
+	return ScaleColor( bitmap.pixels[iu1 + iv1 * bitmap.width], (fracu_rev * fracv_rev) >> 20 ) +
+		ScaleColor( bitmap.pixels[iu2 + iv1 * bitmap.width], (fracu * fracv_rev) >> 20 ) +
+		ScaleColor( bitmap.pixels[iu1 + iv2 * bitmap.width], (fracu_rev * fracv) >> 20 ) +
 		ScaleColor( bitmap.pixels[iu2 + iv2 * bitmap.width], (fracu * fracv) >> 20 );
 }
 
@@ -20,13 +42,16 @@ Sprite::Sprite( const char* fileName )
 	// copy to internal data
 	frameCount = 1;
 	frameSize = original.width;
-	pixels = new uint[frameSize * frameSize];
-	memcpy( pixels, original.pixels, frameSize * frameSize * 4 );
+	// OPT: Precalculation
+	int frameSizeSquared = frameSize * frameSize;
+	pixels = new uint[frameSizeSquared];
+	memcpy( pixels, original.pixels, frameSizeSquared * 4 );
 	// fix alpha
-	for (int i = 0; i < frameSize * frameSize; i++)
+	for (int i = 0; i < frameSizeSquared; i++)
 	{
 		pixels[i] &= 0xffffff;
-		if (pixels[i] == 0xff00ff) pixels[i] = 0; else pixels[i] |= 0xff000000;
+		// OPT: Introduce ternary operator '?'
+		pixels[i] = pixels[i] == 0xff00ff ? 0 : pixels[i] | 0xff000000;
 	}
 }
 
@@ -37,8 +62,10 @@ Sprite::Sprite( const char* fileName, int frames )
 	// copy to internal data
 	frameCount = frames;
 	frameSize = original.width / frameCount;
-	pixels = new uint[frameSize * frameSize * frameCount];
-	memcpy( pixels, original.pixels, frameSize * frameSize * frameCount * 4 );
+	// OPT: Precalculation
+	int frameSizeSqrCount = frameSize * frameSize * frameCount;
+	pixels = new uint[frameSizeSqrCount];
+	memcpy( pixels, original.pixels, frameSizeSqrCount * 4 );
 }
 
 Sprite::Sprite( const char* fileName, int2 topLeft, int2 bottomRight, int size, int frames )
@@ -50,36 +77,43 @@ Sprite::Sprite( const char* fileName, int2 topLeft, int2 bottomRight, int size, 
 	for (uint i = 0; i < pixelCount; i++)
 	{
 		original.pixels[i] &= 0xffffff;
-		if (original.pixels[i] == 0xff00ff) original.pixels[i] = 0; else original.pixels[i] |= 0xff000000;
+		// OPT: Introduce ternary operator '?'
+		original.pixels[i] = original.pixels[i] == 0xff00ff ? 0 : original.pixels[i] | 0xff000000;
 	}
 	// blur alpha for better outlines
 	uint* tmp = new uint[pixelCount], w = original.width;
+	// OPT: Precalculations
+	int pixelCountMinusWidth = pixelCount - w, pixelCountSize = pixelCount - (2 * w + 1);
+	uint wPlusOne = w + 1;
 	for (int j = 0; j < 4; j++)
 	{
-		for (uint i = w + 1; i < pixelCount - w; i++)
+		for (uint i = wPlusOne; i < pixelCountMinusWidth; i++)
 		{
 			uint a1 = original.pixels[i + 1] >> 24, a2 = original.pixels[i - 1] >> 24;
 			uint a3 = original.pixels[i + w] >> 24, a4 = original.pixels[i - w] >> 24;
-			uint ac = original.pixels[i] >> 24;
-			uint a = (2 * ac + a1 + a2 + a3 + a4) / 6;
-			tmp[i] = (original.pixels[i] & 0xffffff) + (a << 24);
+			tmp[i] = (original.pixels[i] & 0xffffff) + (original.pixels[i] * 2 + a1 + a2 + a3 + a4) * oneSixth;
 		}
-		memcpy( original.pixels + w + 1, tmp + w + 1, pixelCount - (2 * w + 1) );
+		memcpy( original.pixels + wPlusOne, tmp + wPlusOne, pixelCountSize );
 	}
-	delete tmp;
+	// WAR: Warning to use delete[]
+	delete[] tmp;
 	// create quad outline tables
 	static float* xleft = 0, * xright = 0, * uleft, * vleft, * uright, * vright;
-	if (!xleft)
+	// OPT: xleft = 0, therefore !xleft = false, so get rid of conditional
+	xleft = new float[size], xright = new float[size];
+	uleft = new float[size], uright = new float[size];
+	vleft = new float[size], vright = new float[size];
+	// OPT: Precalculation
+	float sizeMinusOne = (float)size - 1;
+	for (int i = 0; i < size; i++)
 	{
-		xleft = new float[size], xright = new float[size];
-		uleft = new float[size], uright = new float[size];
-		vleft = new float[size], vright = new float[size];
-		for (int i = 0; i < size; i++) xleft[i] = (float)size - 1, xright[i] = 0;
+		xleft[i] = sizeMinusOne, xright[i] = 0;
 	}
 	// produce rotated frames
-	pixels = new uint[size * frames * size];
-	memset( pixels, 0, size * frames * size * 4 );
-	float2 p[4] = { make_float2( -1, -1 ), make_float2( 1, -1 ), make_float2( 1, 1 ), make_float2( -1, 1 ) };
+	// OPT: Precalculation
+	int sizeSquaredFrames = size * frames * size;
+	pixels = new uint[sizeSquaredFrames];
+	memset( pixels, 0, sizeSquaredFrames * 4 );
 	float2 uv[4] = {
 		make_float2( (float)topLeft.x, (float)topLeft.y ), make_float2( (float)bottomRight.x, (float)topLeft.y ),
 		make_float2( (float)bottomRight.x, (float)bottomRight.y ), make_float2( (float)topLeft.x, (float)bottomRight.y )
@@ -88,10 +122,12 @@ Sprite::Sprite( const char* fileName, int2 topLeft, int2 bottomRight, int size, 
 	{
 		// rotate a square
 		float2 pos[4];
-		float angle = (2 * PI * frame) / frames;
+		// OPT: Precalculated TAU
+		float angle = (TAU * frame) / frames;
 		for (int j = 0; j < 4; j++)
-			pos[j].x = (p[j].x * cosf( angle ) + p[j].y * sinf( angle )) * 0.35f * size + size / 2,
-			pos[j].y = (p[j].x * sinf( angle ) - p[j].y * cosf( angle )) * 0.35f * size + size / 2;
+			// OPT: Bit-shifts
+			pos[j].x = (p[j].x * cosf( angle ) + p[j].y * sinf( angle )) * 0.35f * size + (size >> 1),
+			pos[j].y = (p[j].x * sinf( angle ) - p[j].y * cosf( angle )) * 0.35f * size + (size >> 1);
 		// populate outline tables
 		for (int j = 0; j < 4; j++)
 		{
@@ -130,76 +166,219 @@ Sprite::Sprite( const char* fileName, int2 topLeft, int2 bottomRight, int size, 
 
 void Sprite::ScaleAlpha( uint scale )
 {
-	for (int i = 0; i < frameSize * frameSize * frameCount; i++)
-	{
-		int a = ((pixels[i] >> 24) * scale) >> 8;
-		pixels[i] = (pixels[i] & 0xffffff) + (a << 24);
-	}
+	// OPT: Precalculated value
+	int frameSizeSqrCount = frameSize * frameSize * frameCount;
+#ifdef UNROLLING
+	if ((frameSizeSqrCount & (frameSizeSqrCount - 1)) == 0)
+		for (int i = 0; i < frameSizeSqrCount; i += 2)
+		{
+			int a = ((pixels[i] >> 24) * scale) >> 8;
+			pixels[i] = (pixels[i] & 0xffffff) + (a << 24);
+			a = ((pixels[i + 1] >> 24) * scale) >> 8;
+			pixels[i + 1] = (pixels[i + 1] & 0xffffff) + (a << 24);
+		}
+	else
+	#endif
+		for (int i = 0; i < frameSizeSqrCount; i++)
+		{
+			int a = ((pixels[i] >> 24) * scale) >> 8;
+			pixels[i] = (pixels[i] & 0xffffff) + (a << 24);
+		}
 }
 
 void SpriteInstance::Draw( Surface* target, float2 pos, int frame )
 {
 	// save the area of target that we are about to overwrite
-	if (!backup) backup = new uint[sqr( sprite->frameSize + 1 )];
+	// OPT: Precalculation
+	int frameSize = sprite->frameSize;
+	int frameSizeTimes4 = frameSize * 4;
+	// OPT: Ternary operator
+	backup = backup ? backup : new uint[sqr( frameSize + 1 )];
 	int2 intPos = make_int2( pos );
-	int x1 = intPos.x - sprite->frameSize / 2, x2 = x1 + sprite->frameSize;
-	int y1 = intPos.y - sprite->frameSize / 2, y2 = y1 + sprite->frameSize;
+	// OPT: Bit-shifts
+	int x1 = intPos.x - (frameSize >> 1), x2 = x1 + frameSize;
+	int y1 = intPos.y - (frameSize >> 1), y2 = y1 + frameSize;
 	if (x1 < 0 || y1 < 0 || x2 >= target->width || y2 >= target->height)
 	{
 		// out of range; skip
 		lastTarget = 0;
 		return;
 	}
-	for (int v = 0; v < sprite->frameSize; v++) memcpy( backup + v * sprite->frameSize, target->pixels + x1 + (y1 + v) * target->width, sprite->frameSize * 4 );
+	// OPT: Precalculations
+	uint* dst_start = target->pixels + x1 + y1 * target->width;
+#ifdef UNROLLING
+	if ((frameSize & (frameSize - 1)) == 0)
+		for (int v = 0; v < frameSize; v += 2)
+		{
+			uint* new_backup = backup + v * frameSize;
+			uint* new_dst_start = dst_start + v * target->width;
+			memcpy( new_backup, new_dst_start, frameSizeTimes4 );
+			memcpy( new_backup + frameSize, new_dst_start + target->width, frameSizeTimes4 );
+		}
+	else
+	#endif
+		for (int v = 0; v < frameSize; v++)
+		{
+			memcpy( backup + v * frameSize, dst_start + v * target->width, frameSizeTimes4 );
+		}
 	lastPos = make_int2( x1, y1 );
 	lastTarget = target;
 	// calculate bilinear weights - these are constant in this case.
 	uint frac_x = (int)(255.0f * (pos.x - floorf( pos.x )));
 	uint frac_y = (int)(255.0f * (pos.y - floorf( pos.y )));
+	// Precalculations
+	uint frac_x_inv = (255 - frac_x), frac_y_inv = (255 - frac_y);
 	uint w0 = (frac_x * frac_y) >> 8;
-	uint w1 = ((255 - frac_x) * frac_y) >> 8;
-	uint w2 = (frac_x * (255 - frac_y)) >> 8;
-	uint w3 = ((255 - frac_x) * (255 - frac_y)) >> 8;
+	uint w1 = (frac_x_inv * frac_y) >> 8;
+	uint w2 = (frac_x * frac_y_inv) >> 8;
+	uint w3 = (frac_x_inv * frac_y_inv) >> 8;
 	// draw the sprite frame
-	uint stride = sprite->frameCount * sprite->frameSize;
-	for (int v = 0; v < sprite->frameSize - 1; v++)
-	{
-		uint* dst = target->pixels + x1 + (y1 + v) * target->width;
-		uint* src = sprite->pixels + frame * sprite->frameSize + v * stride;
-		for (int u = 0; u < sprite->frameSize - 1; u++, src++, dst++ )
+	uint stride = sprite->frameCount * frameSize;
+	// Precalculations
+	uint* src_start = sprite->pixels + frame * frameSize;
+	int frameSizeMinusOne = frameSize - 1;
+#ifdef UNROLLING
+	if ((frameSizeMinusOne & (frameSizeMinusOne - 1)) == 0)
+		for (int v = 0; v < frameSizeMinusOne; v += 2)
 		{
-			uint p0 = ScaleColor( src[0], w0 );
-			uint p1 = ScaleColor( src[1], w1 );
-			uint p2 = ScaleColor( src[stride], w2 );
-			uint p3 = ScaleColor( src[stride + 1], w3 );
-			uint pix = p0 + p1 + p2 + p3;
-			uint alpha = pix >> 24;
-			*dst = ScaleColor( pix, alpha ) + ScaleColor( *dst, 255 - alpha );
+			uint* new_dst_start = dst_start + v * target->width;
+			uint* new_src_start = src_start + v * stride;
+			uint* dst = new_dst_start;
+			uint* src = new_src_start;
+			for (int u = 0; u < frameSizeMinusOne; u++, src++, dst++)
+			{
+				uint pix = ScaleColor( src[0], w0 )
+					+ ScaleColor( src[1], w1 )
+					+ ScaleColor( src[stride], w2 )
+					+ ScaleColor( src[stride + 1], w3 );
+				uint alpha = pix >> 24;
+				*dst = ScaleColor( pix, alpha ) + ScaleColor( *dst, 255 - alpha );
+				u++, src++, dst++;
+				pix = ScaleColor( src[0], w0 )
+					+ ScaleColor( src[1], w1 )
+					+ ScaleColor( src[stride], w2 )
+					+ ScaleColor( src[stride + 1], w3 );
+				alpha = pix >> 24;
+				*dst = ScaleColor( pix, alpha ) + ScaleColor( *dst, 255 - alpha );
+			}
+			dst = new_dst_start + target->width;
+			src = new_src_start + stride;
+			for (int u = 0; u < frameSizeMinusOne; u++, src++, dst++)
+			{
+				uint pix = ScaleColor( src[0], w0 )
+					+ ScaleColor( src[1], w1 )
+					+ ScaleColor( src[stride], w2 )
+					+ ScaleColor( src[stride + 1], w3 );
+				uint alpha = pix >> 24;
+				*dst = ScaleColor( pix, alpha ) + ScaleColor( *dst, 255 - alpha );
+				u++, src++, dst++;
+				pix = ScaleColor( src[0], w0 )
+					+ ScaleColor( src[1], w1 )
+					+ ScaleColor( src[stride], w2 )
+					+ ScaleColor( src[stride + 1], w3 );
+				alpha = pix >> 24;
+				*dst = ScaleColor( pix, alpha ) + ScaleColor( *dst, 255 - alpha );
+			}
 		}
-	}
+	else
+	#endif
+		for (int v = 0; v < frameSizeMinusOne; v++)
+		{
+			uint* dst = dst_start + v * target->width;
+			uint* src = src_start + v * stride;
+			for (int u = 0; u < frameSizeMinusOne; u++, src++, dst++)
+			{
+				uint pix = ScaleColor( src[0], w0 )
+					+ ScaleColor( src[1], w1 )
+					+ ScaleColor( src[stride], w2 )
+					+ ScaleColor( src[stride + 1], w3 );
+				uint alpha = pix >> 24;
+				*dst = ScaleColor( pix, alpha ) + ScaleColor( *dst, 255 - alpha );
+			}
+		}
 }
 
 void SpriteInstance::DrawAdditive( Surface* target, float2 pos, int frame )
 {
 	// save the area of target that we are about to overwrite
-	if (!backup) backup = new uint[sprite->frameSize * sprite->frameSize];
+	// OPT: Precalculations
+	int frameSize = sprite->frameSize, frameCount = sprite->frameCount;
+	int frameSizeTimesCount = frameSize * frameCount, frameSizeTimes4 = frameSize * 4;
+	int frameTimesFrameSize = frame * frameSize;
+	// OPT: Ternary operator
+	backup = backup ? backup : new uint[frameSize * frameSize];
 	int2 intPos = make_int2( pos );
-	int x1 = intPos.x - sprite->frameSize / 2, x2 = x1 + sprite->frameSize;
-	int y1 = intPos.y - sprite->frameSize / 2, y2 = y1 + sprite->frameSize;
+	// OPT: Bit-shifts
+	int x1 = intPos.x - (frameSize >> 1), x2 = x1 + frameSize;
+	int y1 = intPos.y - (frameSize >> 1), y2 = y1 + frameSize;
 	if (x1 < 0 || y1 < 0 || x2 >= target->width || y2 >= target->height)
 	{
 		// out of range; skip
 		lastTarget = 0;
 		return;
 	}
-	for (int v = 0; v < sprite->frameSize; v++) memcpy( backup + v * sprite->frameSize, target->pixels + x1 + (y1 + v) * target->width, sprite->frameSize * 4 );
+	// OPT: Precalculate a part of the dst pointer
+	uint* dst_start = target->pixels + x1 + y1 * target->width;
+#ifdef UNROLLING
+	if ((frameSize & (frameSize - 1)) == 0)
+		for (int v = 0; v < frameSize; v += 2)
+		{
+			uint* new_backup = backup + v * frameSize;
+			uint* new_dst_start = dst_start + v * target->width;
+			memcpy( new_backup, new_dst_start, frameSizeTimes4 );
+			memcpy( new_backup + frameSize, new_dst_start + target->width, frameSizeTimes4 );
+		}
+	else
+	#endif
+		for (int v = 0; v < frameSize; v++)
+		{
+			memcpy( backup + v * frameSize, dst_start + v * target->width, frameSizeTimes4 );
+		}
 	// draw the sprite frame
-	for (int v = 0; v < sprite->frameSize; v++) for (int u = 0; u < sprite->frameSize; u++)
-	{
-		uint* dst = target->pixels + x1 + u + (y1 + v) * target->width;
-		uint pix = sprite->pixels[frame * sprite->frameSize + u + v * sprite->frameCount * sprite->frameSize];
-		*dst = AddBlend( *dst, pix );
-	}
+#ifdef UNROLLING
+	if ((frameSize & (frameSize - 1)) == 0)
+		for (int v = 0; v < frameSize; v += 2)
+		{
+			// OPT: Precalculations
+			uint* dst_start_new = dst_start + v * target->width;
+			int index_start = frameTimesFrameSize + v * frameSizeTimesCount;
+			for (int u = 0; u < frameSize; u += 2)
+			{
+				uint* dst = dst_start + u;
+				int new_start = index_start + u;
+				uint pix = sprite->pixels[new_start];
+				*dst = AddBlend( *dst, pix );
+				dst++;
+				pix = sprite->pixels[new_start + 1];
+				*dst = AddBlend( *dst, pix );
+			}
+			dst_start_new = dst_start_new + target->width;
+			index_start = index_start + frameSizeTimesCount;
+			for (int u = 0; u < frameSize; u += 2)
+			{
+				uint* dst = dst_start + u;
+				int new_start = index_start + u;
+				uint pix = sprite->pixels[new_start];
+				*dst = AddBlend( *dst, pix );
+				dst++;
+				pix = sprite->pixels[new_start + 1];
+				*dst = AddBlend( *dst, pix );
+			}
+		}
+	else
+	#endif
+		for (int v = 0; v < frameSize; v++)
+		{
+			// OPT: Precalculations
+			uint* dst_start_new = dst_start + v * target->width;
+			int index_start = frameTimesFrameSize + v * frameSizeTimesCount;
+			for (int u = 0; u < frameSize; u++)
+			{
+				uint* dst = dst_start + u;
+				uint pix = sprite->pixels[index_start + u];
+				*dst = AddBlend( *dst, pix );
+			}
+		}
 	// remember where we drew so it can be removed later
 	lastPos = make_int2( x1, y1 );
 	lastTarget = target;
@@ -209,9 +388,26 @@ void SpriteInstance::Remove()
 {
 	// use the stored pixels to restore the rectangle affected by the sprite.
 	// note: sprites must be removed in reverse order to guarantee correct removal.
-	if (lastTarget) for (int v = 0; v < sprite->frameSize; v++)
+	if (lastTarget)
 	{
-		memcpy( lastTarget->pixels + lastPos.x + (lastPos.y + v) * lastTarget->width,
-			backup + v * sprite->frameSize, sprite->frameSize * 4 );
+		// OPT: Precalculations
+		int frameSize = sprite->frameSize;
+		int frameSizeTimes4 = frameSize * 4;
+		uint* dst_start = lastTarget->pixels + lastPos.x + lastPos.y * lastTarget->width;
+	#ifdef UNROLLING
+		if ((frameSize & (frameSize - 1)) == 0)
+			for (int v = 0; v < frameSize; v += 2)
+			{
+				uint* new_start = dst_start + v * lastTarget->width;
+				uint* new_backup = backup + v * frameSize;
+				memcpy( new_start, new_backup, frameSizeTimes4 );
+				memcpy( new_start + lastTarget->width, new_backup + frameSize, frameSizeTimes4 );
+			}
+		else
+		#endif
+			for (int v = 0; v < frameSize; v++)
+			{
+				memcpy( dst_start + v * lastTarget->width, backup + v * frameSize, frameSizeTimes4 );
+			}
 	}
 }

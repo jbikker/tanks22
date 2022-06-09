@@ -49,12 +49,15 @@ void MyApp::Init()
 		if ((p & 0xffff) == 0) peaks.push_back( make_float3( make_int3( x * 8, y * 8, (p >> 16) & 255 ) ) );
 	}
 	// add sandstorm
-	for( int i = 0; i < 7500; i++ )
+	for (int i = 0; i < 7500; i += 4)
 	{
-		int x = RandomUInt() % map.bitmap->width;
-		int y = RandomUInt() % map.bitmap->height;
-		int d = (RandomUInt() & 15) - 8;
-		sand.push_back( new Particle( bush[i % 3], make_int2( x, y ), map.bitmap->pixels[x + y * map.bitmap->width], d ) );
+		int x[4] = { RandomUInt() % map.bitmap->width, RandomUInt() % map.bitmap->width, RandomUInt() % map.bitmap->width, RandomUInt() % map.bitmap->width };
+		int y[4] = { RandomUInt() % map.bitmap->height, RandomUInt() % map.bitmap->height, RandomUInt() % map.bitmap->height, RandomUInt() % map.bitmap->height };
+		uint d[4] = { (RandomUInt() & 15) - 8, (RandomUInt() & 15) - 8, (RandomUInt() & 15) - 8, (RandomUInt() & 15) - 8 };
+		Sprite* s[4] = { bush[(4 * i) % 3], bush[(4 * i + 1) % 3], bush[(4 * i + 2) % 3], bush[(4 * i + 3) % 3] };
+		float2 p[4] = { make_float2( x[0], y[0] ), make_float2( x[1], y[1] ), make_float2( x[2], y[2] ), make_float2( x[3], y[3] ) };
+		uint c[4] = { map.bitmap->pixels[x[0] + y[0] * map.bitmap->width], map.bitmap->pixels[x[1] + y[1] * map.bitmap->width], map.bitmap->pixels[x[2] + y[2] * map.bitmap->width], map.bitmap->pixels[x[3] + y[3] * map.bitmap->width] };
+		sand.push_back( new Particle( s, p, c, d ) );
 	}
 	// place flags
 	Surface* flagPattern = new Surface( "assets/flag.png" );

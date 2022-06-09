@@ -250,34 +250,73 @@ SpriteExplosion::SpriteExplosion( Bullet* bullet )
 	frame = 0;
 }
 
+// Fast dust code by George Psomathianos
+
 // Particle constructor
-Particle::Particle( Sprite* s, int2 p, uint c, uint d )
+Particle::Particle( Sprite* s[4], float2 p[4], uint c[4], uint d[4] )
 {
-	pos = make_float2( p );
-	dir = make_float2( -1 - RandomFloat() * 4, 0 );
-	color = c;
-	frameChange = d;
-	sprite = SpriteInstance( s );
+	pos4[0] = _mm_set_ps( p[0].x, p[1].x, p[2].x, p[3].x );
+	pos4[1] = _mm_set_ps( p[0].y, p[1].y, p[2].y, p[3].y );
+
+	dir4[0] = _mm_set_ps( -1 - RandomFloat() * 4, -1 - RandomFloat() * 4, -1 - RandomFloat() * 4, -1 - RandomFloat() * 4 );
+	dir4[1] = _mm_setzero_ps();
+	//dir = make_float2( -1 - RandomFloat() * 4, 0 );
+	color4 = _mm_setr_epi32( c[0], c[1], c[2], c[3] );
+	frameChange4 = _mm_setr_epi32( d[0], d[1], d[2], d[3] );
+	sprite[0] = SpriteInstance( s[0] );
+	sprite[1] = SpriteInstance( s[1] );
+	sprite[2] = SpriteInstance( s[2] );
+	sprite[3] = SpriteInstance( s[3] );
+
 }
 
+const __m128 Particle::c0_95 = _mm_set1_ps( 0.95f );
+const __m128 Particle::c0_025 = _mm_set1_ps( 0.025f );
+const __m128 Particle::c0_05 = _mm_set1_ps( 0.05f );
+const __m128i Particle::c255 = _mm_set1_epi32( 255 );
+const __m128i Particle::c256 = _mm_set1_epi32( 256 );
+const __m128 Particle::zero = _mm_setzero_ps();
+const __m128 Particle::one = _mm_set1_ps( 1.0f );
 // Particle behaviour
 void Particle::Tick()
 {
-	pos += dir;
-	dir.y *= 0.95f;
-	if (pos.x < 0)
-	{
-		pos.x = (float)(MyApp::map.bitmap->width - 1);
-		pos.y = (float)(RandomUInt() % MyApp::map.bitmap->height);
-		dir = make_float2( -1 - RandomFloat() * 2, 0 );
-	}
+	pos4[0] = _mm_add_ps( pos4[0], dir4[0] );
+	pos4[1] = _mm_add_ps( pos4[1], dir4[1] );
+	dir4[1] = _mm_mul_ps( dir4[1], c0_95 );
+	__m128 mask = _mm_cmplt_ps( pos4[0], zero );
+	__m128 temp = _mm_and_ps( _mm_set1_ps( (float)MyApp::map.bitmap->width - 1 ), *(__m128*) & mask );
+	pos4[0] = _mm_blendv_ps( pos4[0], temp, mask );
+	temp = _mm_and_ps(
+		(_mm_set_ps(
+			(float)(RandomUInt() % MyApp::map.bitmap->height),
+			(float)(RandomUInt() % MyApp::map.bitmap->height),
+			(float)(RandomUInt() % MyApp::map.bitmap->height),
+			(float)(RandomUInt() % MyApp::map.bitmap->height) )), *(__m128*) & mask );
+	pos4[1] = _mm_blendv_ps( pos4[1], temp, mask );
+	temp = _mm_and_ps( _mm_set_ps( -1 - RandomFloat() * 2.0, -1 - RandomFloat() * 2.0, -1 - RandomFloat() * 2.0, -1 - RandomFloat() * 2.0 ),
+		*(__m128*) & mask );
+	dir4[0] = _mm_blendv_ps( dir4[0], temp, mask );
+	dir4[1] = _mm_blendv_ps( dir4[1], zero, mask );
+	__m128 c0_02 = _mm_set1_ps( 0.02f );
 	for (int s = (int)MyApp::peaks.size(), i = 0; i < s; i++)
 	{
-		float2 toPeak = make_float2( MyApp::peaks[i].x, MyApp::peaks[i].y ) - pos;
-		float g = MyApp::peaks[i].z * 0.02f / sqrtf( dot( toPeak, toPeak ) );
-		toPeak = normalize( toPeak );
-		dir.y -= toPeak.y * g;
+		__m128 peak4[3];
+		peak4[0] = _mm_set1_ps( MyApp::peaks[i].x );
+		peak4[1] = _mm_set1_ps( MyApp::peaks[i].y );
+		peak4[2] = _mm_set1_ps( MyApp::peaks[i].z );
+		__m128 toPeak4[2];
+		toPeak4[0] = _mm_sub_ps( peak4[0], pos4[0] );
+		toPeak4[1] = _mm_sub_ps( peak4[1], pos4[1] );
+		__m128 dotToPeak4[3];
+		dotToPeak4[0] = _mm_mul_ps( peak4[0], peak4[0] );
+		dotToPeak4[1] = _mm_mul_ps( peak4[1], peak4[1] );
+		__m128 dotAdded = _mm_add_ps( dotToPeak4[0], dotToPeak4[1] );
+		__m128 sqrdot = _mm_sqrt_ps( dotAdded );
+		__m128 g4 = _mm_div_ps( _mm_mul_ps( peak4[2], c0_02 ), sqrdot );
+		dir4[1] = _mm_sub_ps( dir4[1], _mm_mul_ps( g4, _mm_div_ps( toPeak4[1], sqrdot ) ) );
 	}
-	dir.y += RandomFloat() * 0.05f - 0.025f;
-	frame = (frame + frameChange + 256) & 255;
+	__m128 random4 = _mm_set_ps( RandomFloat(), RandomFloat(), RandomFloat(), RandomFloat() );
+	dir4[1] = _mm_add_ps( dir4[1],
+		_mm_sub_ps( _mm_mul_ps( random4, c0_05 ), c0_025 ) );
+	frame4 = _mm_and_si128( _mm_add_epi32( _mm_add_epi32( frame4, frameChange4 ), c256 ), c255 );
 }

@@ -18,6 +18,10 @@ public:
 	uint* backup = 0;
 	bool hasBackup = false;
 	int width, height;
+
+	inline static uint64_t averageTickTime = 0;
+	inline static uint64_t averageDrawTime = 0;
+	inline static int counter = 0;
 };
 
 } // namespace Tmpl8#pragma once
